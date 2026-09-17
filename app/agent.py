@@ -16,7 +16,7 @@ from groq import Groq, RateLimitError
 
 from app import tools
 
-MODEL = "openai/gpt-oss-20b"
+MODEL = "openai/gpt-oss-120b"
 MAX_TOOL_ITERATIONS = 6
 
 SYSTEM_PROMPT = """You are the internal IT Support agent for Veridian Corp.
@@ -30,6 +30,7 @@ GROUND RULES (non-negotiable):
    - Embedded violations: a request can be mostly fine but contain a separate policy violation inside it (e.g. someone reporting a phishing email but says they also forwarded it to teammates, which itself violates KB-09). Call out the embedded violation explicitly in your reply even while handling the primary ask.
 5. If a request is too vague to act on (e.g. "it's not working" with no detail), do NOT guess. Use ask_clarifying_question instead of creating a ticket.
 6. If a request has no KB coverage at all (e.g. a request for admin/server access, which no KB article grants), do not resolve it yourself - escalate it to a human with that reasoning. Check the ticket queue history for precedent (e.g. TK-1050 was rejected for exactly this kind of ungrounded access request) and mention it if relevant.
+6b. Any suspected phishing, malware, or unauthorized-access report (KB-09) must use the escalate tool with assigned_to set to "Security" - never create_ticket - matching the TK-1048 precedent, even if you're also telling the employee not to forward it further.
 7. End every request-handling turn with exactly ONE terminal action: create_ticket (for things you can resolve or that are already covered by clear, unconflicted policy), escalate (for anything requiring human/Finance/Security/manager judgment, conflicts, or no-KB-coverage cases), or ask_clarifying_question (for vague requests). Do not call more than one terminal tool for the same request.
 8. After the terminal tool call, ALWAYS write a short final reply as plain, natural-language prose addressed directly to the employee. Never output raw JSON, a tool call, or an echo of a tool's arguments/result as your final reply - not even for ask_clarifying_question. If the terminal action was ask_clarifying_question, your final reply IS the question, phrased conversationally (e.g. "Could you tell me more about..." rather than {"question": "..."}).
 
@@ -124,6 +125,9 @@ def _create_with_retry(client, messages, retries=4):
             time.sleep(2 ** attempt)
 
 
+TERMINAL_TOOLS = {"create_ticket", "escalate", "ask_clarifying_question"}
+
+
 def _execute_tool(name: str, tool_input: dict) -> dict:
     if name == "search_kb":
         result = tools.search_kb(tool_input.get("query", ""))
@@ -174,6 +178,7 @@ def handle_request(employee_message: str, employee: str = None, email: str = Non
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages = list(messages) + [{"role": "user", "content": user_content}]
     tool_calls_made = []
+    terminal_fired = False
 
     for _ in range(MAX_TOOL_ITERATIONS):
         response = _create_with_retry(client, messages)
@@ -191,7 +196,15 @@ def handle_request(employee_message: str, employee: str = None, email: str = Non
 
         for tc in message.tool_calls:
             tool_input = json.loads(tc.function.arguments)
-            result = _execute_tool(tc.function.name, tool_input)
+            is_terminal = tc.function.name in TERMINAL_TOOLS
+            if is_terminal and terminal_fired:
+                # A terminal action already happened this turn; refuse a second
+                # one instead of trusting the model to police rule #7 itself.
+                result = {"error": "A terminal action was already taken for this request. Do not call another - just write your final reply to the employee now."}
+            else:
+                result = _execute_tool(tc.function.name, tool_input)
+                if is_terminal:
+                    terminal_fired = True
             tool_calls_made.append({"name": tc.function.name, "input": tool_input, "result": result})
             messages.append({
                 "role": "tool",
