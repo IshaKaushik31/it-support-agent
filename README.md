@@ -4,6 +4,8 @@ Internal service agent prototype for AIONOS Assignment 2. Given an employee
 IT request, it searches the company knowledge base, decides whether to
 resolve it, escalate it to a human team, or ask a clarifying question, and
 logs every decision (with cited KB-IDs) to an audit trail.
+# Deployed Link
+https://it-support-agent-brj3tljkdu5snkm3g6bhky.streamlit.app/
 
 ## Run it
 
