@@ -34,6 +34,18 @@ with st.sidebar:
     load_clicked = st.button("Load into chat", use_container_width=True)
 
     st.divider()
+    st.subheader("Triage an active ticket")
+    st.caption("Open cases already in the queue - the agent must resolve or re-route these too, not just fresh requests.")
+    active_tickets = [t for t in tools.load_tickets() if t.get("active")]
+    if active_tickets:
+        tk_labels = {t["id"]: f"{t['id']} - {t['employee']}: {t['issue_summary'][:35]}..." for t in active_tickets}
+        chosen_tk = st.selectbox("Active tickets", options=[""] + list(tk_labels), format_func=lambda k: tk_labels.get(k, "-- pick one --"))
+        triage_clicked = st.button("Triage this ticket", use_container_width=True)
+    else:
+        chosen_tk, triage_clicked = None, False
+        st.caption("No active tickets left to triage.")
+
+    st.divider()
     if st.button("Reset demo data (tickets + audit log)", use_container_width=True):
         tools.reset_tickets()
         tools.reset_audit_log()
@@ -59,6 +71,13 @@ if load_clicked and chosen_id:
     st.session_state.chat_display = []
     st.session_state.current_employee = {"employee": req["employee"], "email": req["email"]}
     st.session_state.pending_message = req["request"]
+
+if triage_clicked and chosen_tk:
+    ticket = next(t for t in active_tickets if t["id"] == chosen_tk)
+    st.session_state.thread = None
+    st.session_state.chat_display = []
+    st.session_state.current_employee = {"employee": ticket["employee"], "email": ticket.get("email") or ""}
+    st.session_state.pending_ticket = ticket
 
 def render_chat():
     emp = st.session_state.current_employee
@@ -102,10 +121,28 @@ else:
 
 # st.chat_input can't live inside st.tabs/columns/sidebar, so it's placed
 # here at the page level; it still visually pins to the bottom of the page.
+pending_ticket = st.session_state.pop("pending_ticket", None)
 pending = st.session_state.pop("pending_message", None)
 user_msg = st.chat_input("Type an employee request...") or pending
 
-if user_msg:
+if pending_ticket:
+    if not api_key:
+        st.error("Enter a Groq API key in the sidebar first.")
+    else:
+        st.session_state.chat_display.append({
+            "role": "user",
+            "content": f"[Triage {pending_ticket['id']}] {pending_ticket['issue_summary']} (current status: {pending_ticket['status']}, assigned to: {pending_ticket.get('assigned_to') or 'unassigned'})",
+        })
+        with st.spinner("Agent triaging ticket..."):
+            result = agent.handle_ticket_triage(pending_ticket, api_key=api_key)
+        st.session_state.thread = result["messages"]
+        st.session_state.chat_display.append({
+            "role": "assistant",
+            "content": result["reply"],
+            "tool_calls": result["tool_calls"],
+        })
+        st.rerun()
+elif user_msg:
     if not api_key:
         st.error("Enter a Groq API key in the sidebar first.")
     else:

@@ -82,9 +82,9 @@ def search_kb(query: str = ""):
     return load_kb()
 
 
-def create_ticket(employee: str, email: str, issue_summary: str, category: str,
+def create_ticket(employee: str, issue_summary: str, category: str,
                    action_taken: str, kb_cited: list, status: str,
-                   assigned_to: str = None):
+                   email: str = None, assigned_to: str = None):
     with _lock:
         tickets = load_tickets()
         ticket = {
@@ -103,6 +103,35 @@ def create_ticket(employee: str, email: str, issue_summary: str, category: str,
         tickets.append(ticket)
         _save_json(TICKETS_PATH, tickets)
         return ticket
+
+
+def search_tickets(query: str = ""):
+    """Return the full ticket queue (seed history + agent-created), same
+    reasoning as search_kb: small corpus, no retrieval-quality problem to
+    solve, so the model reasons over all of it rather than us pre-filtering.
+    """
+    return load_tickets()
+
+
+def update_ticket(ticket_id: str, action_taken: str, status: str,
+                   kb_cited: list = None, assigned_to: str = None):
+    """Update an existing open ticket in place (used when the agent is
+    triaging a ticket already in the queue, as opposed to a fresh employee
+    request, which uses create_ticket instead)."""
+    with _lock:
+        tickets = load_tickets()
+        for t in tickets:
+            if t["id"] == ticket_id:
+                t["action_taken"] = action_taken
+                t["status"] = status
+                if kb_cited is not None:
+                    t["kb_cited"] = kb_cited
+                if assigned_to is not None:
+                    t["assigned_to"] = assigned_to
+                t["updated_at"] = datetime.now().isoformat()
+                _save_json(TICKETS_PATH, tickets)
+                return t
+        return {"error": f"ticket {ticket_id} not found"}
 
 
 def append_audit(entry: dict):
