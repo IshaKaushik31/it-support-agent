@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+data/tickets.json
+data/audit_log.json
+.venv/
+scratch_*.py
+scratch_*.json
